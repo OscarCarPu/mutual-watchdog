@@ -1,0 +1,15 @@
+[package]
+name = "esp32"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+esp-idf-svc = { version = "0.51", features = ["binstart"]}
+esp-idf-hal = "0.45.2"
+esp-idf-sys = { version = "0.36.1", features = ["binstart"] }
+embedded-svc = "0.28.1"
+anyhow = "1.0.101"
+
+[build-dependencies]
+dotenvy = "0.15"
+embuild = "0.33"
