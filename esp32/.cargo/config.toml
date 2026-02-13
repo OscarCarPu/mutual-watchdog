@@ -6,7 +6,7 @@ build-std = ["std", "panic_abort"]
 
 [target.xtensa-esp32-espidf]
 linker = "ldproxy"
-runner = "espflash flash"
+runner = "espflash flash --monitor"
 
 [env]
 ESP_IDF_VERSION = "v5.3"

@@ -5,38 +5,63 @@ use esp_idf_hal::delay::FreeRtos;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::prelude::Peripherals;
 use esp_idf_svc::http::client::{Configuration as HttpConfig, EspHttpConnection};
+use esp_idf_svc::mqtt::client::{EspMqttClient, MqttClientConfiguration, QoS};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
 const TELEGRAM_API_TOKEN: &str = env!("TELEGRAM_API_TOKEN");
 const TELEGRAM_CHAT_ID: &str = env!("TELEGRAM_CHAT_ID");
+const MQTT_SERVER: &str = env!("MQTT_SERVER");
+const MQTT_USER: &str = env!("MQTT_USER");
+const MQTT_PASSWORD: &str = env!("MQTT_PASSWORD");
 
-fn send_telegram_message() -> anyhow::Result<()> {
-    let config = HttpConfig {
-        use_global_ca_store: true,
-        crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
+fn create_mqtt_client() -> anyhow::Result<EspMqttClient<'static>> {
+    let config = MqttClientConfiguration {
+        username: Some(MQTT_USER),
+        password: Some(MQTT_PASSWORD),
         ..Default::default()
     };
+    let (client, _) = EspMqttClient::new(MQTT_SERVER, &config)?;
+    println!("MQTT client connected");
+    Ok(client)
+}
 
-    let mut connection = EspHttpConnection::new(&config)?;
-    let mut client = HttpClient::wrap(&mut connection);
+fn send_mqtt_ping(client: &mut EspMqttClient<'static>) {
+    match client.publish("watchdog/ping", QoS::AtMostOnce, false, b"ping") {
+        Ok(_) => println!("Sent MQTT ping"),
+        Err(e) => println!("Error sending MQTT ping: {:?}", e),
+    }
+}
 
-    let url = format!("https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendMessage");
-    let body = format!("chat_id={TELEGRAM_CHAT_ID}&text=Hi");
+fn send_telegram_alert() {
+    let result = (|| -> anyhow::Result<()> {
+        let config = HttpConfig {
+            use_global_ca_store: true,
+            crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
+            ..Default::default()
+        };
+        let mut connection = EspHttpConnection::new(&config)?;
+        let mut client = HttpClient::wrap(&mut connection);
 
-    let headers = [
-        ("Content-Type", "application/x-www-form-urlencoded"),
-        ("Content-Length", &body.len().to_string()),
-    ];
+        let url = format!("https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendMessage");
+        let body = format!("chat_id={TELEGRAM_CHAT_ID}&text=Home lab isn't responding");
 
-    let mut request = client.request(Method::Post, &url, &headers)?;
-    request.write_all(body.as_bytes())?;
-    request.flush()?;
+        let headers = [
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Content-Length", &body.len().to_string()),
+        ];
 
-    let response = request.submit()?;
-    println!("Telegram response status: {}", response.status());
+        let mut request = client.request(Method::Post, &url, &headers)?;
+        request.write_all(body.as_bytes())?;
+        request.flush()?;
+        let response = request.submit()?;
+        println!("Telegram response status: {}", response.status());
+        Ok(())
+    })();
 
-    Ok(())
+    if let Err(e) = result {
+        println!("Error sending Telegram alert: {:?}", e);
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -71,10 +96,11 @@ fn main() -> anyhow::Result<()> {
     let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
     println!("IP: {:?}", ip_info);
 
+    let mut mqtt_client = create_mqtt_client()?;
+
     loop {
-        if let Err(e) = send_telegram_message() {
-            println!("Failed to send Telegram message: {e}");
-        }
+        send_mqtt_ping(&mut mqtt_client);
+        send_telegram_alert();
         FreeRtos::delay_ms(10_000);
     }
 }
