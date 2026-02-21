@@ -1,0 +1,7 @@
+services:
+  lab-watchdog:
+    build: ./lab
+    restart: unless-stopped
+    env_file:
+      - .env
+      - lab/.env

@@ -1,4 +1,4 @@
-.PHONY: esp32-build esp32-flash esp32-stop esp32-clean lab-test lab-run
+.PHONY: esp32-build esp32-flash esp32-stop esp32-clean lab-up lab-down lab-logs
 
 esp32-build:
 	cd esp32 && cargo build
@@ -12,8 +12,11 @@ esp32-stop:
 esp32-clean:
 	cd esp32 && cargo clean
 
-lab-test:
-	cd lab && go test ./...
+lab-up:
+	docker compose up -d --build
 
-lab-run:
-	cd lab && go run .
+lab-down:
+	docker compose down
+
+lab-logs:
+	docker compose logs -f

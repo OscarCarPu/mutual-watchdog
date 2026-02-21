@@ -17,6 +17,9 @@ const TELEGRAM_CHAT_ID: &str = env!("TELEGRAM_CHAT_ID");
 const MQTT_SERVER: &str = env!("MQTT_SERVER");
 const MQTT_USER: &str = env!("MQTT_USER");
 const MQTT_PASSWORD: &str = env!("MQTT_PASSWORD");
+const PING_INTERVAL_SECS: &str = env!("PING_INTERVAL_SECS");
+const CHECK_INTERVAL_SECS: &str = env!("CHECK_INTERVAL_SECS");
+const TIMEOUT_SECS: &str = env!("TIMEOUT_SECS");
 
 fn create_mqtt_client(
     last_ping_time: Arc<Mutex<SystemTime>>,
@@ -30,15 +33,13 @@ fn create_mqtt_client(
     };
 
     let client = EspMqttClient::new_cb(MQTT_SERVER, &config, move |event| {
-        if let EventPayload::Received { topic, .. } = event.payload() {
-            if topic == Some("watchdog/ping-lab") {
-                if let Ok(mut time) = last_ping_time.lock() {
-                    *time = SystemTime::now();
-                }
+        if let EventPayload::Received { topic: Some("watchdog/ping-lab"), .. } = event.payload() {
+            if let Ok(mut time) = last_ping_time.lock() {
+                *time = SystemTime::now();
+            }
 
-                if let Ok(mut sent) = alert_sent.lock() {
-                    *sent = false;
-                }
+            if let Ok(mut sent) = alert_sent.lock() {
+                *sent = false;
             }
         }
     })?;
@@ -130,24 +131,33 @@ fn main() -> anyhow::Result<()> {
     }
     println!("Subscribed to topic");
 
+    let ping_interval_ms: u32 = PING_INTERVAL_SECS.parse::<u32>().unwrap() * 1000;
+    let check_interval_secs: u64 = CHECK_INTERVAL_SECS.parse().unwrap();
+    let timeout_secs: u64 = TIMEOUT_SECS.parse().unwrap();
+
+    let mut last_check = SystemTime::now();
     let mut prev_alert_sent = false;
 
     loop {
         send_mqtt_ping(&mut mqtt_client);
 
-        let mut trigger_alert = false;
-        if let Ok(time) = last_ping_time.lock() {
-            if let Ok(elapsed) = SystemTime::now().duration_since(*time) {
-                println!("Elapsed: {:?}", elapsed);
-                if elapsed > Duration::from_secs(120) {
-                    println!("Timeout, triggering alert");
-                    trigger_alert = true;
+        if let Ok(elapsed_since_check) = SystemTime::now().duration_since(last_check)
+            && elapsed_since_check >= Duration::from_secs(check_interval_secs)
+        {
+            last_check = SystemTime::now();
+
+            let mut trigger_alert = false;
+            if let Ok(time) = last_ping_time.lock() {
+                if let Ok(elapsed) = SystemTime::now().duration_since(*time) {
+                    println!("Elapsed: {:?}", elapsed);
+                    if elapsed > Duration::from_secs(timeout_secs) {
+                        println!("Timeout, triggering alert");
+                        trigger_alert = true;
+                    }
                 }
             }
-        }
 
-        if trigger_alert {
-            if let Ok(mut sent) = alert_sent.lock() {
+            if trigger_alert && let Ok(mut sent) = alert_sent.lock() {
                 if !*sent {
                     println!("Sending alert");
                     send_telegram_message("Home lab isn't responding");
@@ -156,10 +166,8 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     println!("Alert already sent");
                 }
-            }
-        } else if prev_alert_sent {
-            if let Ok(sent) = alert_sent.lock() {
-                if !*sent {
+            } else if prev_alert_sent {
+                if let Ok(sent) = alert_sent.lock() && !*sent {
                     println!("Sending recovery alert");
                     send_telegram_message("Home lab is responding again");
                     prev_alert_sent = false;
@@ -168,6 +176,6 @@ fn main() -> anyhow::Result<()> {
         }
 
         println!("Sleeping");
-        FreeRtos::delay_ms(10_000);
+        FreeRtos::delay_ms(ping_interval_ms);
     }
 }
