@@ -25,6 +25,7 @@ fn create_mqtt_client(
     let config = MqttClientConfiguration {
         username: Some(MQTT_USER),
         password: Some(MQTT_PASSWORD),
+        client_id: Some("esp32-watchdog"),
         ..Default::default()
     };
 
@@ -36,9 +37,7 @@ fn create_mqtt_client(
                 }
 
                 if let Ok(mut sent) = alert_sent.lock() {
-                    if *sent {
-                        *sent = false;
-                    }
+                    *sent = false;
                 }
             }
         }
@@ -55,7 +54,7 @@ fn send_mqtt_ping(client: &mut EspMqttClient<'static>) {
     }
 }
 
-fn send_telegram_alert() {
+fn send_telegram_message(text: &str) {
     let result = (|| -> anyhow::Result<()> {
         let config = HttpConfig {
             use_global_ca_store: true,
@@ -66,7 +65,7 @@ fn send_telegram_alert() {
         let mut client = HttpClient::wrap(&mut connection);
 
         let url = format!("https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendMessage");
-        let body = format!("chat_id={TELEGRAM_CHAT_ID}&text=Home lab isn't responding");
+        let body = format!("chat_id={TELEGRAM_CHAT_ID}&text={text}");
 
         let headers = [
             ("Content-Type", "application/x-www-form-urlencoded"),
@@ -82,7 +81,7 @@ fn send_telegram_alert() {
     })();
 
     if let Err(e) = result {
-        println!("Error sending Telegram alert: {:?}", e);
+        println!("Error sending Telegram message: {:?}", e);
     }
 }
 
@@ -131,6 +130,8 @@ fn main() -> anyhow::Result<()> {
     }
     println!("Subscribed to topic");
 
+    let mut prev_alert_sent = false;
+
     loop {
         send_mqtt_ping(&mut mqtt_client);
 
@@ -149,10 +150,19 @@ fn main() -> anyhow::Result<()> {
             if let Ok(mut sent) = alert_sent.lock() {
                 if !*sent {
                     println!("Sending alert");
-                    send_telegram_alert();
+                    send_telegram_message("Home lab isn't responding");
                     *sent = true;
+                    prev_alert_sent = true;
                 } else {
                     println!("Alert already sent");
+                }
+            }
+        } else if prev_alert_sent {
+            if let Ok(sent) = alert_sent.lock() {
+                if !*sent {
+                    println!("Sending recovery alert");
+                    send_telegram_message("Home lab is responding again");
+                    prev_alert_sent = false;
                 }
             }
         }
