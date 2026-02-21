@@ -120,7 +120,7 @@ func main() {
 	telegramToken = os.Getenv("TELEGRAM_API_TOKEN")
 	telegramChatID = os.Getenv("TELEGRAM_CHAT_ID")
 
-	broker := os.Getenv("MQTT_BROKER")
+	broker := os.Getenv("MQTT_SERVER")
 	user := os.Getenv("MQTT_USER")
 	password := os.Getenv("MQTT_PASSWORD")
 
