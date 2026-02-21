@@ -1,3 +1,6 @@
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
+
 use embedded_svc::http::Method;
 use embedded_svc::http::client::Client as HttpClient;
 use embedded_svc::io::Write;
@@ -5,7 +8,7 @@ use esp_idf_hal::delay::FreeRtos;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::prelude::Peripherals;
 use esp_idf_svc::http::client::{Configuration as HttpConfig, EspHttpConnection};
-use esp_idf_svc::mqtt::client::{EspMqttClient, MqttClientConfiguration, QoS};
+use esp_idf_svc::mqtt::client::{EspMqttClient, EventPayload, MqttClientConfiguration, QoS};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
@@ -15,19 +18,38 @@ const MQTT_SERVER: &str = env!("MQTT_SERVER");
 const MQTT_USER: &str = env!("MQTT_USER");
 const MQTT_PASSWORD: &str = env!("MQTT_PASSWORD");
 
-fn create_mqtt_client() -> anyhow::Result<EspMqttClient<'static>> {
+fn create_mqtt_client(
+    last_ping_time: Arc<Mutex<SystemTime>>,
+    alert_sent: Arc<Mutex<bool>>,
+) -> anyhow::Result<EspMqttClient<'static>> {
     let config = MqttClientConfiguration {
         username: Some(MQTT_USER),
         password: Some(MQTT_PASSWORD),
         ..Default::default()
     };
-    let (client, _) = EspMqttClient::new(MQTT_SERVER, &config)?;
+
+    let client = EspMqttClient::new_cb(MQTT_SERVER, &config, move |event| {
+        if let EventPayload::Received { topic, .. } = event.payload() {
+            if topic == Some("watchdog/ping-lab") {
+                if let Ok(mut time) = last_ping_time.lock() {
+                    *time = SystemTime::now();
+                }
+
+                if let Ok(mut sent) = alert_sent.lock() {
+                    if *sent {
+                        *sent = false;
+                    }
+                }
+            }
+        }
+    })?;
+
     println!("MQTT client connected");
     Ok(client)
 }
 
 fn send_mqtt_ping(client: &mut EspMqttClient<'static>) {
-    match client.publish("watchdog/ping", QoS::AtMostOnce, false, b"ping") {
+    match client.publish("watchdog/ping-esp32", QoS::AtMostOnce, false, b"ping") {
         Ok(_) => println!("Sent MQTT ping"),
         Err(e) => println!("Error sending MQTT ping: {:?}", e),
     }
@@ -96,11 +118,46 @@ fn main() -> anyhow::Result<()> {
     let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
     println!("IP: {:?}", ip_info);
 
-    let mut mqtt_client = create_mqtt_client()?;
+    let last_ping_time = Arc::new(Mutex::new(SystemTime::now()));
+    let alert_sent = Arc::new(Mutex::new(false));
+
+    let mut mqtt_client = create_mqtt_client(last_ping_time.clone(), alert_sent.clone())?;
+    println!("MQTT client created");
+    FreeRtos::delay_ms(2_000);
+
+    while let Err(e) = mqtt_client.subscribe("watchdog/ping-lab", QoS::AtMostOnce) {
+        println!("Error subscribing ({:?}), retrying", e);
+        FreeRtos::delay_ms(1_000);
+    }
+    println!("Subscribed to topic");
 
     loop {
         send_mqtt_ping(&mut mqtt_client);
-        send_telegram_alert();
+
+        let mut trigger_alert = false;
+        if let Ok(time) = last_ping_time.lock() {
+            if let Ok(elapsed) = SystemTime::now().duration_since(*time) {
+                println!("Elapsed: {:?}", elapsed);
+                if elapsed > Duration::from_secs(120) {
+                    println!("Timeout, triggering alert");
+                    trigger_alert = true;
+                }
+            }
+        }
+
+        if trigger_alert {
+            if let Ok(mut sent) = alert_sent.lock() {
+                if !*sent {
+                    println!("Sending alert");
+                    send_telegram_alert();
+                    *sent = true;
+                } else {
+                    println!("Alert already sent");
+                }
+            }
+        }
+
+        println!("Sleeping");
         FreeRtos::delay_ms(10_000);
     }
 }
