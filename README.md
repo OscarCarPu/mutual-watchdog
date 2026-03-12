@@ -3,7 +3,6 @@ Mutual watchdog between my home lab (go) and an external esp32 (rust), for notif
 
 ## ESP32
 
-Rust firmware for ESP32 (Xtensa) using ESP-IDF v5.3. Connects to WiFi, publishes MQTT pings, and sends Telegram alerts when the home lab is unresponsive.
 
 ### Configuration
 
@@ -35,5 +34,4 @@ cp esp32/.env.example esp32/.env
 make esp32-build    # build the firmware
 make esp32-flash    # flash and monitor
 make esp32-stop     # erase flash
-make esp32-clean    # clean build artifacts
 ```

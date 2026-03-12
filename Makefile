@@ -1,16 +1,13 @@
 .PHONY: esp32-build esp32-flash esp32-stop esp32-clean lab-up lab-down lab-logs
 
 esp32-build:
-	cd esp32 && cargo build
+	. ~/export-esp.sh && cd esp32 && cargo +esp build-devkit
 
 esp32-flash:
-	cd esp32 && cargo run
+	. ~/export-esp.sh && cd esp32 && cargo +esp run-devkit
 
 esp32-stop:
 	espflash erase-flash -p /dev/ttyUSB0
-
-esp32-clean:
-	cd esp32 && cargo clean
 
 lab-up:
 	docker compose up -d --build

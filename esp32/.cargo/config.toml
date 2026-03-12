@@ -1,12 +1,18 @@
 [build]
-target = "xtensa-esp32-espidf"
+target = "xtensa-esp32-none-elf"
 
 [unstable]
-build-std = ["std", "panic_abort"]
+build-std = ["core","alloc"]
 
-[target.xtensa-esp32-espidf]
-linker = "ldproxy"
-runner = "espflash flash --monitor"
+[target.xtensa-esp32-none-elf]
+runner = "espflash flash --monitor --chip esp32 --before default-reset --baud 115200"
 
-[env]
-ESP_IDF_VERSION = "v5.3"
+[target.riscv32imc-unknown-none-elf]
+runner = "espflash flash --monitor --chip esp32c3"
+
+[alias]
+build-devkit = "build --target xtensa-esp32-none-elf --features esp32 --release "
+build-supermini = "build --target riscv32imc-unknown-none-elf --features esp32c3 --release"
+
+run-devkit = "run --target xtensa-esp32-none-elf --features esp32 --release "
+run-supermini = "run --target riscv32imc-unknown-none-elf --features esp32c3 --release"
