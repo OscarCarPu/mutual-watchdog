@@ -1,8 +1,10 @@
 # mutual-watchdog
 Mutual watchdog between my home lab (go) and an external esp32 (rust), for notifying me if any of them is down
 
-## ESP32
+## Docs 
 
+- [ESP32 docs](docs/esp32.md)
+- [Go consumer](docs/consumer.md)
 
 ### Configuration
 
