@@ -31,3 +31,21 @@ async fn main(_spawner: Spawner) -> ! {
         Timer::after_millis(1000).await;
     }
 }
+
+#[embassy_executor::task]
+async fn create_mqtt_client() {}
+
+#[embassy_executor::task]
+async fn send_mqtt_ping() {}
+
+#[embassy_executor::task]
+async fn check_mqtt_ping() {}
+
+#[embassy_executor::task]
+async fn create_telegram_client() {}
+
+#[embassy_executor::task]
+async fn send_telegram_message() {}
+
+#[embassy_executor::task]
+async fn connect_wifi() {}
