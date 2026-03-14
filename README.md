@@ -43,3 +43,7 @@ make esp32-build-prod   # build the firmware
 make esp32-flash-prod   # flash and monitor
 make esp32-stop-prod    # erase flash
 ```
+
+### Case
+
+The `case/` directory contains a 3D-printable enclosure (`.3mf`) for the ESP32-C3 SuperMini board used in the production deployment.
