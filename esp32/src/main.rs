@@ -1,11 +1,18 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use core::time::Duration;
 
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
 use embassy_executor::Spawner;
-use embassy_net::{Ipv4Address, Runner, Stack, StackResources, tcp::TcpSocket};
+use embassy_net::{dns::DnsQueryType, Ipv4Address, Runner, Stack, StackResources, tcp::TcpSocket};
 use embassy_time::Timer;
+use embedded_io_async::{Read as _, Write as _};
+use embedded_tls::{Aes128GcmSha256, NoVerify, TlsConfig, TlsConnection, TlsContext};
 use esp_alloc as _;
 use esp_backtrace as _;
 #[cfg(feature = "esp32c3")]
@@ -21,6 +28,8 @@ use esp_radio::{
     Controller,
     wifi::{ClientConfig, ModeConfig, WifiController, WifiDevice, WifiEvent, WifiStaState},
 };
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -78,8 +87,8 @@ async fn main(spawner: Spawner) -> ! {
         .config_v4()
         .inspect(|c| println!("IPv4 config: {c:?}"));
 
-    // Pinging
-    ping_server(stack).await;
+    // Send Telegram message
+    send_telegram_message(stack, "hello world").await;
 
     // deep sleep
     let mut rtc = Rtc::new(peripherals.LPWR);
@@ -152,34 +161,97 @@ async fn connect_wifi(mut controller: WifiController<'static>) {
     }
 }
 
-async fn ping_server(stack: Stack<'static>) {
-    let mut rx_buffer = [0; 1024];
-    let mut tx_buffer = [0; 1024];
-
-    let ip = Ipv4Address::new(192, 168, 1, 132);
-    let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    socket.set_timeout(Some(embassy_time::Duration::from_secs(5)));
-
-    match socket.connect((ip, 8001)).await {
-        Ok(_) => println!("Ping {} OK", ip),
-        Err(e) => println!("Ping {} failed: {:?}", ip, e),
-    }
-    socket.close();
-}
-
 #[embassy_executor::task]
 async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     runner.run().await
 }
 
-#[embassy_executor::task]
 async fn create_mqtt_client() {}
 
-#[embassy_executor::task]
 async fn send_mqtt_ping() {}
 
-#[embassy_executor::task]
-async fn create_telegram_client() {}
+async fn send_telegram_message(stack: Stack<'static>, message: &str) {
+    // DNS resolve api.telegram.org
+    let ip_addr = match stack
+        .dns_query("api.telegram.org", DnsQueryType::A)
+        .await
+    {
+        Ok(addrs) => addrs[0],
+        Err(e) => {
+            println!("DNS query failed: {:?}", e);
+            return;
+        }
+    };
 
-#[embassy_executor::task]
-async fn send_telegram_message() {}
+    let remote_ip = match ip_addr {
+        embassy_net::IpAddress::Ipv4(ip) => ip,
+        _ => {
+            println!("Expected IPv4 address");
+            return;
+        }
+    };
+
+    // TCP connect to port 443
+    let mut rx_buf = [0u8; 4096];
+    let mut tx_buf = [0u8; 4096];
+    let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
+    socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
+
+    if let Err(e) = socket.connect((remote_ip, 443)).await {
+        println!("TCP connect failed: {:?}", e);
+        return;
+    }
+    println!("TCP connected to api.telegram.org");
+
+    // Seed ChaCha20 RNG from hardware RNG
+    let rng = Rng::new();
+    let mut seed = [0u8; 32];
+    for chunk in seed.chunks_mut(4) {
+        let bytes = rng.random().to_le_bytes();
+        chunk.copy_from_slice(&bytes[..chunk.len()]);
+    }
+    let mut crypto_rng = ChaCha20Rng::from_seed(seed);
+
+    // TLS handshake
+    let mut tls_rx = vec![0u8; 16640];
+    let mut tls_tx = vec![0u8; 1024];
+    let tls_config: TlsConfig<'_, Aes128GcmSha256> = TlsConfig::new()
+        .with_server_name("api.telegram.org")
+        .enable_rsa_signatures();
+    let mut tls = TlsConnection::new(socket, &mut tls_rx, &mut tls_tx);
+
+    if let Err(e) = tls
+        .open::<_, NoVerify>(TlsContext::new(&tls_config, &mut crypto_rng))
+        .await
+    {
+        println!("TLS handshake failed: {:?}", e);
+        return;
+    }
+    println!("TLS handshake complete");
+
+    // Build HTTP POST request (matching old esp-idf implementation)
+    let body: String = format!("chat_id={}&text={}", TELEGRAM_CHAT_ID, message);
+    let request: String = format!(
+        "POST /bot{}/sendMessage HTTP/1.1\r\nHost: api.telegram.org\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        TELEGRAM_API_TOKEN, body.len(), body
+    );
+
+    // Send request
+    if let Err(e) = tls.write_all(request.as_bytes()).await {
+        println!("TLS write failed: {:?}", e);
+        return;
+    }
+    tls.flush().await.ok();
+
+    // Read response
+    let mut resp_buf = [0u8; 1024];
+    match tls.read(&mut resp_buf).await {
+        Ok(n) => {
+            let resp = core::str::from_utf8(&resp_buf[..n]).unwrap_or("(invalid utf8)");
+            println!("Telegram response: {}", resp);
+        }
+        Err(e) => println!("Read response failed: {:?}", e),
+    }
+
+    tls.close().await.ok();
+}
