@@ -33,7 +33,13 @@ cp esp32/.env.example esp32/.env
 ### Build & Flash
 
 ```sh
-make esp32-build    # build the firmware
-make esp32-flash    # flash and monitor
-make esp32-stop     # erase flash
+# ESP32 DevKit (dev)
+make esp32-build-dev    # build the firmware
+make esp32-flash-dev    # flash and monitor
+make esp32-stop-dev     # erase flash
+
+# ESP32-C3 SuperMini (prod)
+make esp32-build-prod   # build the firmware
+make esp32-flash-prod   # flash and monitor
+make esp32-stop-prod    # erase flash
 ```

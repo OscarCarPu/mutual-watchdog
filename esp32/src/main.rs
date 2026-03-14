@@ -6,6 +6,8 @@ use embassy_net::{Runner, Stack, StackResources, dns::DnsQueryType, tcp::TcpSock
 use embassy_time::Timer;
 use esp_alloc as _;
 use esp_backtrace as _;
+#[cfg(feature = "esp32c3")]
+use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::{clock::CpuClock, rng::Rng, timer::timg::TimerGroup};
 use esp_println::println;
 use esp_radio::{
@@ -42,7 +44,13 @@ async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(size: 72 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
+    #[cfg(feature = "esp32")]
     esp_rtos::start(timg0.timer0);
+    #[cfg(feature = "esp32c3")]
+    {
+        let sw_ints = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+        esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
+    }
 
     let stack = setup_wifi(&spawner, peripherals.WIFI).await;
 
