@@ -1,14 +1,21 @@
 #![no_std]
 #![no_main]
 
+use core::time::Duration;
+
 use embassy_executor::Spawner;
-use embassy_net::{Runner, Stack, StackResources, dns::DnsQueryType, tcp::TcpSocket};
+use embassy_net::{Ipv4Address, Runner, Stack, StackResources, tcp::TcpSocket};
 use embassy_time::Timer;
 use esp_alloc as _;
 use esp_backtrace as _;
 #[cfg(feature = "esp32c3")]
 use esp_hal::interrupt::software::SoftwareInterruptControl;
-use esp_hal::{clock::CpuClock, rng::Rng, timer::timg::TimerGroup};
+use esp_hal::{
+    clock::CpuClock,
+    rng::Rng,
+    rtc_cntl::{Rtc, sleep::TimerWakeupSource},
+    timer::timg::TimerGroup,
+};
 use esp_println::println;
 use esp_radio::{
     Controller,
@@ -39,6 +46,7 @@ const TIMEOUT_SECS: &str = env!("TIMEOUT_SECS");
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
+    // peripherals
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     esp_alloc::heap_allocator!(size: 72 * 1024);
@@ -52,6 +60,7 @@ async fn main(spawner: Spawner) -> ! {
         esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
     }
 
+    // WiFi
     let stack = setup_wifi(&spawner, peripherals.WIFI).await;
 
     loop {
@@ -69,10 +78,13 @@ async fn main(spawner: Spawner) -> ! {
         .config_v4()
         .inspect(|c| println!("IPv4 config: {c:?}"));
 
-    loop {
-        ping_google(stack).await;
-        Timer::after_millis(5000).await;
-    }
+    // Pinging
+    ping_server(stack).await;
+
+    // deep sleep
+    let mut rtc = Rtc::new(peripherals.LPWR);
+    let timer = TimerWakeupSource::new(Duration::from_secs(15));
+    rtc.sleep_deep(&[&timer]);
 }
 
 async fn setup_wifi(
@@ -140,24 +152,19 @@ async fn connect_wifi(mut controller: WifiController<'static>) {
     }
 }
 
-async fn ping_google(stack: Stack<'static>) {
+async fn ping_server(stack: Stack<'static>) {
     let mut rx_buffer = [0; 1024];
     let mut tx_buffer = [0; 1024];
 
-    match stack.dns_query("google.com", DnsQueryType::A).await {
-        Ok(addrs) if !addrs.is_empty() => {
-            let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-            socket.set_timeout(Some(embassy_time::Duration::from_secs(5)));
+    let ip = Ipv4Address::new(192, 168, 1, 132);
+    let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+    socket.set_timeout(Some(embassy_time::Duration::from_secs(5)));
 
-            match socket.connect((addrs[0], 80)).await {
-                Ok(_) => println!("Ping google.com ({}) OK", addrs[0]),
-                Err(e) => println!("Ping google.com failed: {:?}", e),
-            }
-            socket.close();
-        }
-        Ok(_) => println!("DNS: no results for google.com"),
-        Err(e) => println!("DNS query failed: {:?}", e),
+    match socket.connect((ip, 8001)).await {
+        Ok(_) => println!("Ping {} OK", ip),
+        Err(e) => println!("Ping {} failed: {:?}", ip, e),
     }
+    socket.close();
 }
 
 #[embassy_executor::task]
@@ -170,9 +177,6 @@ async fn create_mqtt_client() {}
 
 #[embassy_executor::task]
 async fn send_mqtt_ping() {}
-
-#[embassy_executor::task]
-async fn check_mqtt_ping() {}
 
 #[embassy_executor::task]
 async fn create_telegram_client() {}

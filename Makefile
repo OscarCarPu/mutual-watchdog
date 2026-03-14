@@ -1,10 +1,12 @@
-.PHONY: esp32-build-dev esp32-build-prod esp32-flash-dev esp32-flash-prod esp32-stop-dev esp32-stop-prod lab-up lab-down lab-logs
+.PHONY: esp32-build-dev esp32-build-prod esp32-build-all esp32-flash-dev esp32-flash-prod esp32-stop-dev esp32-stop-prod lab-up lab-down lab-logs
 
 esp32-build-dev:
 	. ~/export-esp.sh && cd esp32 && cargo +esp build-devkit
 
 esp32-build-prod:
 	. ~/export-esp.sh && cd esp32 && cargo +esp build-supermini
+
+esp32-build: esp32-build-dev esp32-build-prod
 
 esp32-flash-dev:
 	. ~/export-esp.sh && cd esp32 && cargo +esp run-devkit
