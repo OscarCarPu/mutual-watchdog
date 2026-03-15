@@ -7,13 +7,28 @@
 - Synchronous working: wakes up, connects WiFi, publishes MQTT ping, then deep sleeps
 - Deep sleep interval is configured via `PING_INTERVAL_SECS`
 
+## Recovery alerting
+
+Mirrors the consumer's recovery pattern using an `ALERT_STATE` variable persisted in RTC fast memory (`.rtc_fast.persistent` linker section). A magic number (`0xA1E27001`) means "alert active"; any other value (including garbage after flash) means "no alert".
+
+- On first MQTT failure (connect or publish): sends "Home lab isn't responding" via Telegram and sets `ALERT_STATE` to the magic value
+- On subsequent failures: alert is suppressed (no duplicates)
+- On successful MQTT ping after a failure: sends "Home lab is responding again" and clears `ALERT_STATE`
+- The MQTT client is explicitly dropped before sending Telegram to avoid exhausting the `StackResources<3>` socket pool (DHCP + MQTT + DNS/TCP for Telegram would exceed 3 slots)
+
+### RTC memory gotchas
+
+- **`sleep_deep()` powers down RTC memory by default** on both ESP32 and ESP32-C3. The `deep_sleep` function uses `rtc.sleep()` with a custom `RtcSleepConfig` that sets `rtc_fastmem_pd_en(false)` to keep RTC fast memory alive. See [esp-hal#2516](https://github.com/esp-rs/esp-hal/issues/2516).
+- **WiFi driver overwrites parts of RTC fast memory** on ESP32. Using a `u32` magic number instead of a `bool` avoids false positives from corrupted memory — garbage will never accidentally match `0xA1E27001`.
+- The `.rtc_fast.persistent` section is `NOLOAD`, so the `= 0` initializer in source code has no effect. On first power-on, the value is whatever was in RTC RAM.
+
 ### Functions
 
 ##### `main`
-Entry point. Initializes peripherals, heap allocator, and timer group. Sets up WiFi, waits for link and DHCP, then connects to MQTT and publishes a ping. On MQTT failure, sends a Telegram alert. Always enters deep sleep at the end.
+Entry point. Initializes peripherals, heap allocator, and timer group. Sets up WiFi, waits for link and DHCP, then connects to MQTT and publishes a ping. On MQTT failure, sends a Telegram alert (suppressed on consecutive failures via RTC-persisted `ALERT_STATE`). On successful ping after a failure, sends a recovery alert. The MQTT client is dropped before any Telegram calls to free its socket slot. Always enters deep sleep at the end.
 
 ##### `deep_sleep`
-Configures the RTC timer wakeup source with `PING_INTERVAL_SECS` and enters deep sleep. Never returns.
+Configures the RTC timer wakeup source with `PING_INTERVAL_SECS` and enters deep sleep using a custom `RtcSleepConfig` that keeps RTC fast memory powered (`rtc_fastmem_pd_en = false`). Never returns.
 
 ##### `setup_wifi`
 Initializes the esp-radio controller, creates the WiFi STA device and embassy-net stack with DHCP. Spawns `connect_wifi` and `net_task` as background tasks. Returns the network stack.

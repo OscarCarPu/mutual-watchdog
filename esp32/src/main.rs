@@ -20,7 +20,7 @@ use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::{
     clock::CpuClock,
     rng::Rng,
-    rtc_cntl::{Rtc, sleep::TimerWakeupSource},
+    rtc_cntl::{Rtc, sleep::{RtcSleepConfig, TimerWakeupSource}},
     timer::timg::TimerGroup,
 };
 use esp_println::println;
@@ -63,12 +63,18 @@ const TELEGRAM_API_TOKEN: &str = env!("TELEGRAM_API_TOKEN");
 const TELEGRAM_CHAT_ID: &str = env!("TELEGRAM_CHAT_ID");
 const PING_INTERVAL_SECS: &str = env!("PING_INTERVAL_SECS");
 
+#[unsafe(link_section = ".rtc_fast.persistent")]
+static mut ALERT_STATE: u32 = 0;
+const ALERT_ACTIVE: u32 = 0xA1E2_7001;
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     // peripherals
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     esp_alloc::heap_allocator!(size: 72 * 1024);
+
+    println!("RTC: ALERT_STATE=0x{:08X}", unsafe { ALERT_STATE });
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     #[cfg(feature = "esp32")]
@@ -78,6 +84,7 @@ async fn main(spawner: Spawner) -> ! {
         let sw_ints = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
         esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
     }
+
 
     // WiFi
     let stack = setup_wifi(&spawner, peripherals.WIFI).await;
@@ -94,16 +101,36 @@ async fn main(spawner: Spawner) -> ! {
         .config_v4()
         .inspect(|c| println!("IPv4 config: {c:?}"));
 
-    let mut client = match create_mqtt_client(stack).await {
-        Ok(client) => client,
+    let ping_result = match create_mqtt_client(stack).await {
+        Ok(mut client) => {
+            let result = send_mqtt_ping(&mut client).await;
+            drop(client);
+            result
+        }
         Err(_e) => {
-            send_telegram_message(stack, "MQTT connect failed").await;
+            if unsafe { ALERT_STATE } != ALERT_ACTIVE {
+                send_telegram_message(stack, "Home lab isn't responding").await;
+                unsafe { ALERT_STATE = ALERT_ACTIVE };
+            }
             println!("MQTT connect failed, sleeping...");
             deep_sleep(peripherals.LPWR);
         }
     };
 
-    send_mqtt_ping(&mut client).await;
+    match ping_result {
+        Ok(()) => {
+            if unsafe { ALERT_STATE } == ALERT_ACTIVE {
+                send_telegram_message(stack, "Home lab is responding again").await;
+                unsafe { ALERT_STATE = 0 };
+            }
+        }
+        Err(_e) => {
+            if unsafe { ALERT_STATE } != ALERT_ACTIVE {
+                send_telegram_message(stack, "Home lab isn't responding").await;
+                unsafe { ALERT_STATE = ALERT_ACTIVE };
+            }
+        }
+    }
 
     println!("Sleeping...");
     deep_sleep(peripherals.LPWR);
@@ -112,7 +139,11 @@ async fn main(spawner: Spawner) -> ! {
 fn deep_sleep(lpwr: esp_hal::peripherals::LPWR<'static>) -> ! {
     let mut rtc = Rtc::new(lpwr);
     let timer = TimerWakeupSource::new(Duration::from_secs(PING_INTERVAL_SECS.parse().unwrap()));
-    rtc.sleep_deep(&[&timer]);
+    // Keep RTC fast memory powered during deep sleep to persist ALERT_STATE
+    let mut cfg = RtcSleepConfig::deep();
+    cfg.set_rtc_fastmem_pd_en(false);
+    rtc.sleep(&cfg, &[&timer]);
+    unreachable!();
 }
 
 async fn setup_wifi(
@@ -223,7 +254,7 @@ async fn create_mqtt_client(stack: Stack<'static>) -> Result<MqttClient, MqttErr
     Ok(client)
 }
 
-async fn send_mqtt_ping(client: &mut MqttClient) {
+async fn send_mqtt_ping(client: &mut MqttClient) -> Result<(), MqttError<'static>> {
     let topic =
         unsafe { TopicName::new_unchecked(MqttString::from_slice("watchdog/ping").unwrap()) };
     let pub_options = PublicationOptions {
@@ -233,8 +264,8 @@ async fn send_mqtt_ping(client: &mut MqttClient) {
     };
     client
         .publish(&pub_options, Bytes::Borrowed(b"Ping"))
-        .await
-        .unwrap();
+        .await?;
+    Ok(())
 }
 
 async fn send_telegram_message(stack: Stack<'static>, message: &str) {
