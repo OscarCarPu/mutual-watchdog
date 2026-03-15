@@ -15,13 +15,14 @@ esp-rtos = {version="0.2.0", features = ["embassy", "esp-radio"]}
 esp-bootloader-esp-idf = "0.4.0"
 embassy-executor = "0.9.1"
 embassy-time = "0.5.0"
-embassy-net = { version = "0.7", features = ["dhcpv4", "dns", "tcp"] }
+embassy-net = { version = "0.8", features = ["dhcpv4", "dns", "tcp"] }
 esp-backtrace = { version = "0.18", default-features = false, features = ["panic-handler", "println"]}
 esp-println = { version = "0.16", default-features = false}
 esp-radio = { version = "0.17.0", features = ["wifi"]}
 esp-alloc = "0.9.0"
 static_cell = "2.1.0"
-embedded-tls = { version = "0.17", default-features = false }
-embedded-io-async = "0.6"
+embedded-tls = { version = "0.18", default-features = false }
+embedded-io-async = "0.7"
 rand_core = { version = "0.6", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
+rust-mqtt = { version = "0.4", default-features = false, features = ["v5", "alloc"]}

@@ -9,10 +9,10 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use embassy_executor::Spawner;
-use embassy_net::{dns::DnsQueryType, Ipv4Address, Runner, Stack, StackResources, tcp::TcpSocket};
+use embassy_net::{Runner, Stack, StackResources, dns::DnsQueryType, tcp::TcpSocket};
 use embassy_time::Timer;
-use embedded_io_async::{Read as _, Write as _};
-use embedded_tls::{Aes128GcmSha256, NoVerify, TlsConfig, TlsConnection, TlsContext};
+use embedded_io_async::Write as _;
+use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
 use esp_alloc as _;
 use esp_backtrace as _;
 #[cfg(feature = "esp32c3")]
@@ -30,8 +30,17 @@ use esp_radio::{
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
+use rust_mqtt::{
+    Bytes,
+    buffer::AllocBuffer,
+    client::{Client, MqttError, options::{ConnectOptions, PublicationOptions}},
+    config::{KeepAlive, SessionExpiryInterval},
+    types::{MqttBinary, MqttString, QoS, TopicName},
+};
 
 esp_bootloader_esp_idf::esp_app_desc!();
+
+type MqttClient = Client<'static, TcpSocket<'static>, AllocBuffer, 1, 1, 1>;
 
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
@@ -49,9 +58,7 @@ const MQTT_USER: &str = env!("MQTT_USER");
 const MQTT_PASSWORD: &str = env!("MQTT_PASSWORD");
 const TELEGRAM_API_TOKEN: &str = env!("TELEGRAM_API_TOKEN");
 const TELEGRAM_CHAT_ID: &str = env!("TELEGRAM_CHAT_ID");
-const PING_INTERVAL_SECS: &str = env!("PING_INTERVAL_SECS");
 const CHECK_INTERVAL_SECS: &str = env!("CHECK_INTERVAL_SECS");
-const TIMEOUT_SECS: &str = env!("TIMEOUT_SECS");
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -72,10 +79,7 @@ async fn main(spawner: Spawner) -> ! {
     // WiFi
     let stack = setup_wifi(&spawner, peripherals.WIFI).await;
 
-    loop {
-        if stack.is_link_up() {
-            break;
-        }
+    while !stack.is_link_up() {
         Timer::after_millis(500).await;
     }
     println!("WiFi link up!");
@@ -87,12 +91,24 @@ async fn main(spawner: Spawner) -> ! {
         .config_v4()
         .inspect(|c| println!("IPv4 config: {c:?}"));
 
-    // Send Telegram message
-    send_telegram_message(stack, "hello world").await;
+    let mut client = match create_mqtt_client(stack).await {
+        Ok(client) => client,
+        Err(_e) => {
+            send_telegram_message(stack, "MQTT connect failed").await;
+            println!("MQTT connect failed, sleeping...");
+            deep_sleep(peripherals.LPWR);
+        }
+    };
 
-    // deep sleep
-    let mut rtc = Rtc::new(peripherals.LPWR);
-    let timer = TimerWakeupSource::new(Duration::from_secs(15));
+    send_mqtt_ping(&mut client).await;
+
+    println!("Sleeping...");
+    deep_sleep(peripherals.LPWR);
+}
+
+fn deep_sleep(lpwr: esp_hal::peripherals::LPWR<'static>) -> ! {
+    let mut rtc = Rtc::new(lpwr);
+    let timer = TimerWakeupSource::new(Duration::from_secs(CHECK_INTERVAL_SECS.parse().unwrap()));
     rtc.sleep_deep(&[&timer]);
 }
 
@@ -166,16 +182,63 @@ async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     runner.run().await
 }
 
-async fn create_mqtt_client() {}
+async fn create_mqtt_client(
+    stack: Stack<'static>,
+) -> Result<MqttClient, MqttError<'static>> {
+    let buffer = mk_static!(AllocBuffer, AllocBuffer);
+    let mut client = Client::<'_, _, _, 1, 1, 1>::new(buffer);
 
-async fn send_mqtt_ping() {}
+    let connect_options = ConnectOptions {
+        clean_start: true,
+        keep_alive: KeepAlive::default(),
+        session_expiry_interval: SessionExpiryInterval::NeverEnd,
+        user_name: Some(MqttString::from_slice(MQTT_USER).unwrap()),
+        password: Some(MqttBinary::from_slice(MQTT_PASSWORD.as_bytes()).unwrap()),
+        will: None,
+    };
+
+    let rx_buf = mk_static!([u8; 4096], [0u8; 4096]);
+    let tx_buf = mk_static!([u8; 4096], [0u8; 4096]);
+    let mut socket = TcpSocket::new(stack, rx_buf, tx_buf);
+    socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
+
+    let host_port = MQTT_SERVER.strip_prefix("mqtt://").unwrap_or(MQTT_SERVER);
+    let (host, port) = host_port.rsplit_once(':').unwrap_or((host_port, "1883"));
+    let remote_ip: embassy_net::Ipv4Address = host.parse().unwrap();
+    let remote_port: u16 = port.parse().unwrap();
+    if let Err(e) = socket.connect((remote_ip, remote_port)).await {
+        println!("MQTT TCP connect failed: {:?}", e);
+        return Err(MqttError::Network(embedded_io_async::ErrorKind::Other));
+    }
+
+    client
+        .connect(
+            socket,
+            &connect_options,
+            Some(MqttString::from_slice("watchdog-esp32").unwrap()),
+        )
+        .await?;
+
+    Ok(client)
+}
+
+async fn send_mqtt_ping(client: &mut MqttClient) {
+    let topic =
+        unsafe { TopicName::new_unchecked(MqttString::from_slice("watchdog/ping").unwrap()) };
+    let pub_options = PublicationOptions {
+        retain: false,
+        topic: topic.as_borrowed(),
+        qos: QoS::AtMostOnce,
+    };
+    client
+        .publish(&pub_options, Bytes::Borrowed(b"Ping"))
+        .await
+        .unwrap();
+}
 
 async fn send_telegram_message(stack: Stack<'static>, message: &str) {
     // DNS resolve api.telegram.org
-    let ip_addr = match stack
-        .dns_query("api.telegram.org", DnsQueryType::A)
-        .await
-    {
+    let ip_addr = match stack.dns_query("api.telegram.org", DnsQueryType::A).await {
         Ok(addrs) => addrs[0],
         Err(e) => {
             println!("DNS query failed: {:?}", e);
@@ -183,13 +246,7 @@ async fn send_telegram_message(stack: Stack<'static>, message: &str) {
         }
     };
 
-    let remote_ip = match ip_addr {
-        embassy_net::IpAddress::Ipv4(ip) => ip,
-        _ => {
-            println!("Expected IPv4 address");
-            return;
-        }
-    };
+    let embassy_net::IpAddress::Ipv4(remote_ip) = ip_addr;
 
     // TCP connect to port 443
     let mut rx_buf = [0u8; 4096];
@@ -210,18 +267,21 @@ async fn send_telegram_message(stack: Stack<'static>, message: &str) {
         let bytes = rng.random().to_le_bytes();
         chunk.copy_from_slice(&bytes[..chunk.len()]);
     }
-    let mut crypto_rng = ChaCha20Rng::from_seed(seed);
+    let crypto_rng = ChaCha20Rng::from_seed(seed);
 
     // TLS handshake
     let mut tls_rx = vec![0u8; 16640];
     let mut tls_tx = vec![0u8; 1024];
-    let tls_config: TlsConfig<'_, Aes128GcmSha256> = TlsConfig::new()
+    let tls_config = TlsConfig::new()
         .with_server_name("api.telegram.org")
         .enable_rsa_signatures();
     let mut tls = TlsConnection::new(socket, &mut tls_rx, &mut tls_tx);
 
     if let Err(e) = tls
-        .open::<_, NoVerify>(TlsContext::new(&tls_config, &mut crypto_rng))
+        .open(TlsContext::new(
+            &tls_config,
+            UnsecureProvider::new::<Aes128GcmSha256>(crypto_rng),
+        ))
         .await
     {
         println!("TLS handshake failed: {:?}", e);
@@ -233,7 +293,9 @@ async fn send_telegram_message(stack: Stack<'static>, message: &str) {
     let body: String = format!("chat_id={}&text={}", TELEGRAM_CHAT_ID, message);
     let request: String = format!(
         "POST /bot{}/sendMessage HTTP/1.1\r\nHost: api.telegram.org\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        TELEGRAM_API_TOKEN, body.len(), body
+        TELEGRAM_API_TOKEN,
+        body.len(),
+        body
     );
 
     // Send request
