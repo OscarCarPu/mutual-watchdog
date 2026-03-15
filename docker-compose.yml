@@ -1,9 +1,9 @@
 services:
-  lab-watchdog:
-    build: ./lab
+  consumer-watchdog:
+    build: ./consumer
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
       - .env
-      - lab/.env
+      - consumer/.env

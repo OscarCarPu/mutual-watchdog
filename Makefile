@@ -1,4 +1,4 @@
-.PHONY: esp32-build-dev esp32-build-prod esp32-build-all esp32-flash-dev esp32-flash-prod esp32-stop-dev esp32-stop-prod lab-up lab-down lab-logs
+.PHONY: esp32-build-dev esp32-build-prod esp32-build esp32-flash-dev esp32-flash-prod esp32-stop-dev esp32-stop-prod consumer-up consumer-down consumer-logs
 
 esp32-build-dev:
 	. ~/export-esp.sh && cd esp32 && cargo +esp build-devkit
@@ -20,11 +20,11 @@ esp32-stop-dev:
 esp32-stop-prod:
 	espflash erase-flash -p /dev/ttyACM0
 
-lab-up:
+consumer-up:
 	docker compose up -d --build
 
-lab-down:
+consumer-down:
 	docker compose down
 
-lab-logs:
+consumer-logs:
 	docker compose logs -f

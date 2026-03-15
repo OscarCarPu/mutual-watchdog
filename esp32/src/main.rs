@@ -33,7 +33,10 @@ use rand_core::SeedableRng;
 use rust_mqtt::{
     Bytes,
     buffer::AllocBuffer,
-    client::{Client, MqttError, options::{ConnectOptions, PublicationOptions}},
+    client::{
+        Client, MqttError,
+        options::{ConnectOptions, PublicationOptions},
+    },
     config::{KeepAlive, SessionExpiryInterval},
     types::{MqttBinary, MqttString, QoS, TopicName},
 };
@@ -58,7 +61,7 @@ const MQTT_USER: &str = env!("MQTT_USER");
 const MQTT_PASSWORD: &str = env!("MQTT_PASSWORD");
 const TELEGRAM_API_TOKEN: &str = env!("TELEGRAM_API_TOKEN");
 const TELEGRAM_CHAT_ID: &str = env!("TELEGRAM_CHAT_ID");
-const CHECK_INTERVAL_SECS: &str = env!("CHECK_INTERVAL_SECS");
+const PING_INTERVAL_SECS: &str = env!("PING_INTERVAL_SECS");
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -108,7 +111,7 @@ async fn main(spawner: Spawner) -> ! {
 
 fn deep_sleep(lpwr: esp_hal::peripherals::LPWR<'static>) -> ! {
     let mut rtc = Rtc::new(lpwr);
-    let timer = TimerWakeupSource::new(Duration::from_secs(CHECK_INTERVAL_SECS.parse().unwrap()));
+    let timer = TimerWakeupSource::new(Duration::from_secs(PING_INTERVAL_SECS.parse().unwrap()));
     rtc.sleep_deep(&[&timer]);
 }
 
@@ -182,9 +185,7 @@ async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     runner.run().await
 }
 
-async fn create_mqtt_client(
-    stack: Stack<'static>,
-) -> Result<MqttClient, MqttError<'static>> {
+async fn create_mqtt_client(stack: Stack<'static>) -> Result<MqttClient, MqttError<'static>> {
     let buffer = mk_static!(AllocBuffer, AllocBuffer);
     let mut client = Client::<'_, _, _, 1, 1, 1>::new(buffer);
 

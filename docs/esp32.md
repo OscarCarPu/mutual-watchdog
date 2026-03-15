@@ -5,7 +5,7 @@
 ## General info
 
 - Synchronous working: wakes up, connects WiFi, publishes MQTT ping, then deep sleeps
-- Deep sleep interval is configured via `CHECK_INTERVAL_SECS`
+- Deep sleep interval is configured via `PING_INTERVAL_SECS`
 
 ### Functions
 
@@ -13,7 +13,7 @@
 Entry point. Initializes peripherals, heap allocator, and timer group. Sets up WiFi, waits for link and DHCP, then connects to MQTT and publishes a ping. On MQTT failure, sends a Telegram alert. Always enters deep sleep at the end.
 
 ##### `deep_sleep`
-Configures the RTC timer wakeup source with `CHECK_INTERVAL_SECS` and enters deep sleep. Never returns.
+Configures the RTC timer wakeup source with `PING_INTERVAL_SECS` and enters deep sleep. Never returns.
 
 ##### `setup_wifi`
 Initializes the esp-radio controller, creates the WiFi STA device and embassy-net stack with DHCP. Spawns `connect_wifi` and `net_task` as background tasks. Returns the network stack.
@@ -25,7 +25,7 @@ Embassy task that manages the WiFi STA lifecycle. Configures the connection with
 Parses `MQTT_SERVER` (supports `mqtt://host:port` format), opens a TCP connection to the broker, then performs the MQTT handshake with credentials from env vars. Uses `mk_static!` for buffer allocations so the client can be returned and used across function boundaries. Returns `Result<MqttClient, MqttError>`.
 
 ##### `send_mqtt_ping`
-Publishes a "Ping" message to the `watchdog/ping` topic with QoS 0 (at most once, fire-and-forget). The home lab Go consumer subscribes to this topic to detect ESP32 liveness.
+Publishes a "Ping" message to the `watchdog/ping` topic with QoS 0 (at most once, fire-and-forget). The consumer subscribes to this topic to detect ESP32 liveness.
 
 ##### `send_telegram_message`
 Sends a message to the configured Telegram bot. Since Telegram requires HTTPS and there's no HTTP client library compatible with embassy-net, this is done manually through the full network stack:

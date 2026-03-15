@@ -14,7 +14,6 @@ import (
 var (
 	telegramToken   string
 	telegramChatID  string
-	pingInterval    time.Duration
 	checkInterval   time.Duration
 	timeoutDuration time.Duration
 )
@@ -46,18 +45,8 @@ func (w *Watchdog) Connect() error {
 	return nil
 }
 
-func (w *Watchdog) Ping() {
-	ticker := time.NewTicker(pingInterval)
-	go func() {
-		for range ticker.C {
-			w.mqttClient.Publish("watchdog/ping-lab", 0, false, "ping")
-			fmt.Println("Sent heartbeat to ESP32")
-		}
-	}()
-}
-
 func (w *Watchdog) Subscribe() {
-	w.mqttClient.Subscribe("watchdog/ping-esp32", 0, func(c mqtt.Client, m mqtt.Message) {
+	w.mqttClient.Subscribe("watchdog/ping", 0, func(c mqtt.Client, m mqtt.Message) {
 		w.lastPing = time.Now()
 		if w.alertSent {
 			fmt.Println("Sending recovery alert")
@@ -124,7 +113,6 @@ func main() {
 	user := os.Getenv("MQTT_USER")
 	password := os.Getenv("MQTT_PASSWORD")
 
-	pingInterval, _ = time.ParseDuration(os.Getenv("PING_INTERVAL_SECS") + "s")
 	checkInterval, _ = time.ParseDuration(os.Getenv("CHECK_INTERVAL_SECS") + "s")
 	timeoutDuration, _ = time.ParseDuration(os.Getenv("TIMEOUT_SECS") + "s")
 
@@ -135,7 +123,6 @@ func main() {
 	}
 
 	w.Subscribe()
-	w.Ping()
 
 	select {}
 }

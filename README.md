@@ -1,10 +1,10 @@
 # mutual-watchdog
-Mutual watchdog between my home lab (go) and an external esp32 (rust), for notifying me if any of them is down
+Watchdog system where an external ESP32 (Rust) periodically pings a home lab consumer (Go) over MQTT. If the ESP32 stops pinging, the consumer sends a Telegram alert. If MQTT is unreachable, the ESP32 sends its own Telegram alert directly.
 
-## Docs 
+## Docs
 
 - [ESP32 docs](docs/esp32.md)
-- [Go consumer](docs/consumer.md)
+- [Consumer docs](docs/consumer.md)
 
 ### Configuration
 
@@ -13,14 +13,24 @@ Copy the example env files and fill in your values:
 ```sh
 cp .env.example .env
 cp esp32/.env.example esp32/.env
+cp consumer/.env.example consumer/.env
 ```
 
-**Root `.env`** (shared config, also used by the home lab side):
+**Root `.env`** (shared config):
 | Variable | Description |
 |---|---|
 | `TELEGRAM_API_TOKEN` | Telegram bot API token |
 | `TELEGRAM_CHAT_ID` | Telegram chat ID for alerts |
 | `MQTT_SERVER` | MQTT broker URL (e.g. `mqtt://192.168.1.135:1883`) |
+| `PING_INTERVAL_SECS` | How often the ESP32 pings (used by ESP32 firmware) |
+| `CHECK_INTERVAL_SECS` | How often the consumer checks for timeouts |
+| `TIMEOUT_SECS` | How long before the consumer considers the ESP32 down |
+
+**`consumer/.env`** (MQTT credentials for the consumer):
+| Variable | Description |
+|---|---|
+| `MQTT_USER` | MQTT username |
+| `MQTT_PASSWORD` | MQTT password |
 
 **`esp32/.env`** (compiled into the ESP32 firmware at build time):
 | Variable | Description |
@@ -42,6 +52,14 @@ make esp32-stop-dev     # erase flash
 make esp32-build-prod   # build the firmware
 make esp32-flash-prod   # flash and monitor
 make esp32-stop-prod    # erase flash
+```
+
+### Consumer
+
+```sh
+make consumer-up      # start consumer container
+make consumer-down    # stop consumer container
+make consumer-logs    # tail consumer logs
 ```
 
 ### Case
