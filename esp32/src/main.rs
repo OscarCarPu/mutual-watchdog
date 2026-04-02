@@ -19,8 +19,12 @@ use esp_backtrace as _;
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::{
     clock::CpuClock,
+    gpio::{Level, Output},
     rng::Rng,
-    rtc_cntl::{Rtc, sleep::{RtcSleepConfig, TimerWakeupSource}},
+    rtc_cntl::{
+        Rtc,
+        sleep::{RtcSleepConfig, TimerWakeupSource},
+    },
     timer::timg::TimerGroup,
 };
 use esp_println::println;
@@ -74,6 +78,9 @@ async fn main(spawner: Spawner) -> ! {
 
     esp_alloc::heap_allocator!(size: 72 * 1024);
 
+    // Turn off the red LED on GPIO8 (active low)
+    Output::new(peripherals.GPIO8, Level::High, Default::default());
+
     println!("RTC: ALERT_STATE=0x{:08X}", unsafe { ALERT_STATE });
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -85,6 +92,8 @@ async fn main(spawner: Spawner) -> ! {
         esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
     }
 
+    println!("Waiting 10s before WiFi...");
+    Timer::after_secs(10).await;
 
     // WiFi
     let stack = setup_wifi(&spawner, peripherals.WIFI).await;
@@ -198,6 +207,9 @@ async fn connect_wifi(mut controller: WifiController<'static>) {
             println!("Starting WiFi...");
             controller.start_async().await.unwrap();
             println!("WiFi started!");
+            controller
+                .set_power_saving(esp_radio::wifi::PowerSaveMode::Maximum)
+                .unwrap();
         }
 
         println!("Connecting to '{}'...", WIFI_SSID);

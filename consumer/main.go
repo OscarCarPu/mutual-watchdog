@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -49,33 +50,30 @@ func (w *Watchdog) Subscribe() {
 	w.mqttClient.Subscribe("watchdog/ping", 0, func(c mqtt.Client, m mqtt.Message) {
 		w.lastPing = time.Now()
 		if w.alertSent {
-			fmt.Println("Sending recovery alert")
+			log.Println("Sending recovery alert")
 			if err := w.sendMessage("Esp32 watchdog is responding again"); err != nil {
-				fmt.Printf("Failed to send recovery alert: %v\n", err)
+				log.Printf("Failed to send recovery alert: %v\n", err)
 			}
 			w.alertSent = false
 		}
-		fmt.Println("Received heartbeat from ESP32")
 	})
 
 	go func() {
 		ticker := time.NewTicker(checkInterval)
 		for range ticker.C {
 			elapsed := time.Since(w.lastPing)
-			fmt.Printf("Elapsed: %v\n", elapsed.Round(time.Second))
 			if elapsed > timeoutDuration {
 				if !w.alertSent {
-					fmt.Println("Timeout, sending alert")
+					log.Println("Timeout, sending alert")
 					if err := w.sendMessage("Esp32 watchdog isn't responding"); err != nil {
-						fmt.Printf("Failed to send alert: %v\n", err)
+						log.Printf("Failed to send alert: %v\n", err)
 					} else {
 						w.alertSent = true
 					}
 				} else {
-					fmt.Println("Alert already sent")
+					log.Printf("No response, elapsed: %v\n", elapsed.Round(time.Second))
 				}
 			}
-			fmt.Println("Sleeping")
 		}
 	}()
 }
