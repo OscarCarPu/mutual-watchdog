@@ -12,7 +12,7 @@ runner = "espflash flash --monitor --chip esp32c3 -p /dev/ttyACM0"
 
 [alias]
 build-devkit = "build --target xtensa-esp32-none-elf --no-default-features --features esp32 --release"
-build-supermini = "build --target riscv32imc-unknown-none-elf --no-default-features --features esp32c3 --release"
+build-xiao = "build --target riscv32imc-unknown-none-elf --no-default-features --features esp32c3 --release"
 
 run-devkit = "run --target xtensa-esp32-none-elf --no-default-features --features esp32 --release"
-run-supermini = "run --target riscv32imc-unknown-none-elf --no-default-features --features esp32c3 --release"
+run-xiao = "run --target riscv32imc-unknown-none-elf --no-default-features --features esp32c3 --release"

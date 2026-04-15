@@ -19,7 +19,6 @@ use esp_backtrace as _;
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::{
     clock::CpuClock,
-    gpio::{Level, Output},
     rng::Rng,
     rtc_cntl::{
         Rtc,
@@ -74,12 +73,9 @@ const ALERT_ACTIVE: u32 = 0xA1E2_7001;
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     // peripherals
-    let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz));
 
-    esp_alloc::heap_allocator!(size: 72 * 1024);
-
-    // Turn off the red LED on GPIO8 (active low)
-    Output::new(peripherals.GPIO8, Level::High, Default::default());
+    esp_alloc::heap_allocator!(size: 60 * 1024);
 
     println!("RTC: ALERT_STATE=0x{:08X}", unsafe { ALERT_STATE });
 
@@ -92,8 +88,8 @@ async fn main(spawner: Spawner) -> ! {
         esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
     }
 
-    println!("Waiting 10s before WiFi...");
-    Timer::after_secs(10).await;
+    // Small delay to let power stabilize before WiFi radio spike
+    Timer::after_millis(500).await;
 
     // WiFi
     let stack = setup_wifi(&spawner, peripherals.WIFI).await;
@@ -160,10 +156,8 @@ async fn setup_wifi(
     wifi: esp_hal::peripherals::WIFI<'static>,
 ) -> Stack<'static> {
     let esp_radio_ctrl = &*mk_static!(Controller<'static>, esp_radio::init().unwrap());
-
     let (controller, interfaces) =
         esp_radio::wifi::new(esp_radio_ctrl, wifi, Default::default()).unwrap();
-
     let device = interfaces.sta;
 
     let net_config = embassy_net::Config::dhcpv4(Default::default());
@@ -178,6 +172,7 @@ async fn setup_wifi(
         seed,
     );
 
+    Timer::after_millis(2000).await;
     spawner.spawn(connect_wifi(controller)).ok();
     spawner.spawn(net_task(runner)).ok();
 
