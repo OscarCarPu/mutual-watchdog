@@ -10,7 +10,7 @@ use alloc::string::String;
 use alloc::vec;
 use embassy_executor::Spawner;
 use embassy_net::{Runner, Stack, StackResources, dns::DnsQueryType, tcp::TcpSocket};
-use embassy_time::Timer;
+use embassy_time::{Duration as EmbassyDuration, Timer, with_timeout};
 use embedded_io_async::Write as _;
 use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
 use esp_alloc as _;
@@ -223,6 +223,24 @@ async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     runner.run().await
 }
 
+async fn try_2s<F, T, E>(label: &str, fut: F) -> Result<T, ()>
+where
+    F: core::future::Future<Output = Result<T, E>>,
+    E: core::fmt::Debug,
+{
+    match with_timeout(EmbassyDuration::from_secs(2), fut).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => {
+            println!("{} failed: {:?}", label, e);
+            Err(())
+        }
+        Err(_) => {
+            println!("{} timed out", label);
+            Err(())
+        }
+    }
+}
+
 async fn create_mqtt_client(stack: Stack<'static>) -> Result<MqttClient, MqttError<'static>> {
     let buffer = mk_static!(AllocBuffer, AllocBuffer);
     let mut client = Client::<'_, _, _, 1, 1, 1>::new(buffer);
@@ -245,18 +263,26 @@ async fn create_mqtt_client(stack: Stack<'static>) -> Result<MqttClient, MqttErr
     let (host, port) = host_port.rsplit_once(':').unwrap_or((host_port, "1883"));
     let remote_ip: embassy_net::Ipv4Address = host.parse().unwrap();
     let remote_port: u16 = port.parse().unwrap();
-    if let Err(e) = socket.connect((remote_ip, remote_port)).await {
-        println!("MQTT TCP connect failed: {:?}", e);
+    if try_2s("MQTT TCP connect", socket.connect((remote_ip, remote_port)))
+        .await
+        .is_err()
+    {
         return Err(MqttError::Network(embedded_io_async::ErrorKind::Other));
     }
 
-    client
-        .connect(
+    if try_2s(
+        "MQTT CONNECT",
+        client.connect(
             socket,
             &connect_options,
             Some(MqttString::from_slice("watchdog-esp32").unwrap()),
-        )
-        .await?;
+        ),
+    )
+    .await
+    .is_err()
+    {
+        return Err(MqttError::Network(embedded_io_async::ErrorKind::Other));
+    }
 
     Ok(client)
 }
@@ -277,13 +303,15 @@ async fn send_mqtt_ping(client: &mut MqttClient) -> Result<(), MqttError<'static
 
 async fn send_telegram_message(stack: Stack<'static>, message: &str) {
     // DNS resolve api.telegram.org
-    let ip_addr = match stack.dns_query("api.telegram.org", DnsQueryType::A).await {
-        Ok(addrs) => addrs[0],
-        Err(e) => {
-            println!("DNS query failed: {:?}", e);
-            return;
-        }
+    let Ok(addrs) = try_2s(
+        "DNS query",
+        stack.dns_query("api.telegram.org", DnsQueryType::A),
+    )
+    .await
+    else {
+        return;
     };
+    let ip_addr = addrs[0];
 
     let embassy_net::IpAddress::Ipv4(remote_ip) = ip_addr;
 
@@ -293,8 +321,10 @@ async fn send_telegram_message(stack: Stack<'static>, message: &str) {
     let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
     socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
 
-    if let Err(e) = socket.connect((remote_ip, 443)).await {
-        println!("TCP connect failed: {:?}", e);
+    if try_2s("TCP connect", socket.connect((remote_ip, 443)))
+        .await
+        .is_err()
+    {
         return;
     }
     println!("TCP connected to api.telegram.org");
@@ -316,14 +346,16 @@ async fn send_telegram_message(stack: Stack<'static>, message: &str) {
         .enable_rsa_signatures();
     let mut tls = TlsConnection::new(socket, &mut tls_rx, &mut tls_tx);
 
-    if let Err(e) = tls
-        .open(TlsContext::new(
+    if try_2s(
+        "TLS handshake",
+        tls.open(TlsContext::new(
             &tls_config,
             UnsecureProvider::new::<Aes128GcmSha256>(crypto_rng),
-        ))
-        .await
+        )),
+    )
+    .await
+    .is_err()
     {
-        println!("TLS handshake failed: {:?}", e);
         return;
     }
     println!("TLS handshake complete");
@@ -338,21 +370,20 @@ async fn send_telegram_message(stack: Stack<'static>, message: &str) {
     );
 
     // Send request
-    if let Err(e) = tls.write_all(request.as_bytes()).await {
-        println!("TLS write failed: {:?}", e);
+    if try_2s("TLS write", tls.write_all(request.as_bytes()))
+        .await
+        .is_err()
+    {
         return;
     }
-    tls.flush().await.ok();
+    let _ = try_2s("TLS flush", tls.flush()).await;
 
     // Read response
     let mut resp_buf = [0u8; 1024];
-    match tls.read(&mut resp_buf).await {
-        Ok(n) => {
-            let resp = core::str::from_utf8(&resp_buf[..n]).unwrap_or("(invalid utf8)");
-            println!("Telegram response: {}", resp);
-        }
-        Err(e) => println!("Read response failed: {:?}", e),
+    if let Ok(n) = try_2s("TLS read", tls.read(&mut resp_buf)).await {
+        let resp = core::str::from_utf8(&resp_buf[..n]).unwrap_or("(invalid utf8)");
+        println!("Telegram response: {}", resp);
     }
 
-    tls.close().await.ok();
+    let _ = with_timeout(EmbassyDuration::from_secs(2), tls.close()).await;
 }

@@ -27,38 +27,53 @@ type Watchdog struct {
 }
 
 func NewWatchdog(broker string, user string, password string) *Watchdog {
+	w := &Watchdog{
+		httpClient: &http.Client{},
+		lastPing:   time.Now(),
+	}
+
 	opts := mqtt.NewClientOptions().AddBroker(broker)
 	opts.SetUsername(user)
 	opts.SetPassword(password)
 	opts.SetClientID("homelab-watchdog")
+	opts.SetConnectRetry(true)
+	opts.SetConnectRetryInterval(5 * time.Second)
+	opts.SetAutoReconnect(true)
+	opts.SetMaxReconnectInterval(30 * time.Second)
+	opts.SetOnConnectHandler(func(c mqtt.Client) {
+		log.Println("MQTT connected, subscribing")
+		if token := c.Subscribe("watchdog/ping", 0, w.onPing); token.Wait() && token.Error() != nil {
+			log.Printf("Subscribe failed: %v\n", token.Error())
+		}
+	})
+	opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
+		log.Printf("MQTT connection lost: %v\n", err)
+	})
 
-	return &Watchdog{
-		mqttClient: mqtt.NewClient(opts),
-		httpClient: &http.Client{},
-		lastPing:   time.Now(),
-	}
+	w.mqttClient = mqtt.NewClient(opts)
+	return w
 }
 
 func (w *Watchdog) Connect() error {
-	if token := w.mqttClient.Connect(); token.Wait() && token.Error() != nil {
-		return token.Error()
-	}
-	return nil
+	token := w.mqttClient.Connect()
+	token.Wait()
+	return token.Error()
 }
 
-func (w *Watchdog) Subscribe() {
-	w.mqttClient.Subscribe("watchdog/ping", 0, func(c mqtt.Client, m mqtt.Message) {
-		w.lastPing = time.Now()
-		if w.alertSent {
-			log.Println("Sending recovery alert")
-			if err := w.sendMessage("Esp32 watchdog is responding again"); err != nil {
-				log.Printf("Failed to send recovery alert: %v\n", err)
-			}
-			w.alertSent = false
+func (w *Watchdog) onPing(_ mqtt.Client, _ mqtt.Message) {
+	w.lastPing = time.Now()
+	if w.alertSent {
+		log.Println("Sending recovery alert")
+		if err := w.sendMessage("Esp32 watchdog is responding again"); err != nil {
+			log.Printf("Failed to send recovery alert: %v\n", err)
 		}
-	})
+		w.alertSent = false
+	}
+}
 
+func (w *Watchdog) StartTimeoutChecker() {
 	go func() {
+		time.Sleep(timeoutDuration)
 		ticker := time.NewTicker(checkInterval)
 		for range ticker.C {
 			elapsed := time.Since(w.lastPing)
@@ -117,10 +132,10 @@ func main() {
 	w := NewWatchdog(broker, user, password)
 
 	if err := w.Connect(); err != nil {
-		panic(err)
+		log.Printf("Initial MQTT connect pending: %v (will keep retrying)\n", err)
 	}
 
-	w.Subscribe()
+	w.StartTimeoutChecker()
 
 	select {}
 }
