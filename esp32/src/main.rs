@@ -75,7 +75,7 @@ async fn main(spawner: Spawner) -> ! {
     // peripherals
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz));
 
-    esp_alloc::heap_allocator!(size: 60 * 1024);
+    esp_alloc::heap_allocator!(size: 96 * 1024);
 
     println!("RTC: ALERT_STATE=0x{:08X}", unsafe { ALERT_STATE });
 
