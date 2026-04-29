@@ -1,6 +1,6 @@
 # ESP32 docs
 
-- 2 stages: development (ESP32 DevKit) and production (ESP32-C3 SuperMini)
+- 2 stages: development (ESP32 DevKit) and production (XIAO ESP32-C3)
 
 ## General info
 
@@ -22,10 +22,17 @@ Mirrors the consumer's recovery pattern using an `ALERT_STATE` variable persiste
 - **WiFi driver overwrites parts of RTC fast memory** on ESP32. Using a `u32` magic number instead of a `bool` avoids false positives from corrupted memory — garbage will never accidentally match `0xA1E27001`.
 - The `.rtc_fast.persistent` section is `NOLOAD`, so the `= 0` initializer in source code has no effect. On first power-on, the value is whatever was in RTC RAM.
 
+## Network timeouts
+
+Every network operation (TCP connect, MQTT CONNECT, DNS, TLS handshake, TLS read/write) is wrapped in `try_2s`, a 2-second `with_timeout` helper. Without this, a half-open socket or unresponsive broker could keep the firmware awake indefinitely and prevent it from reaching `deep_sleep`, which would both drain power and (more importantly) break the watchdog contract — a stuck ESP32 looks identical to a healthy one from the consumer's perspective only if it eventually pings, so a stuck ESP32 that never sleeps + reboots is a false negative the consumer can't catch.
+
 ### Functions
 
 ##### `main`
 Entry point. Initializes peripherals, heap allocator, and timer group. Sets up WiFi, waits for link and DHCP, then connects to MQTT and publishes a ping. On MQTT failure, sends a Telegram alert (suppressed on consecutive failures via RTC-persisted `ALERT_STATE`). On successful ping after a failure, sends a recovery alert. The MQTT client is dropped before any Telegram calls to free its socket slot. Always enters deep sleep at the end.
+
+##### `try_2s`
+Helper that wraps any fallible async future in a 2-second `embassy_time::with_timeout`. Logs and returns `Err(())` on either inner error or timeout. Used everywhere a network call could otherwise hang.
 
 ##### `deep_sleep`
 Configures the RTC timer wakeup source with `PING_INTERVAL_SECS` and enters deep sleep using a custom `RtcSleepConfig` that keeps RTC fast memory powered (`rtc_fastmem_pd_en = false`). Never returns.
@@ -34,7 +41,7 @@ Configures the RTC timer wakeup source with `PING_INTERVAL_SECS` and enters deep
 Initializes the esp-radio controller, creates the WiFi STA device and embassy-net stack with DHCP. Spawns `connect_wifi` and `net_task` as background tasks. Returns the network stack.
 
 ##### `connect_wifi`
-Embassy task that manages the WiFi STA lifecycle. Configures the connection with SSID/password from env vars, starts the driver, and calls `connect_async`. On disconnect, waits 5s and reconnects automatically.
+Embassy task that manages the WiFi STA lifecycle. Configures the connection with SSID/password from env vars, starts the driver, sets `PowerSaveMode::Maximum` to keep current draw down between pings, and calls `connect_async`. On disconnect, waits 5s and reconnects automatically.
 
 ##### `create_mqtt_client`
 Parses `MQTT_SERVER` (supports `mqtt://host:port` format), opens a TCP connection to the broker, then performs the MQTT handshake with credentials from env vars. Uses `mk_static!` for buffer allocations so the client can be returned and used across function boundaries. Returns `Result<MqttClient, MqttError>`.
@@ -52,4 +59,4 @@ Sends a message to the configured Telegram bot. Since Telegram requires HTTPS an
 5. **HTTP** — writes a raw `POST /bot<token>/sendMessage` request with form-encoded body
 6. **Response** — reads and prints the Telegram API JSON response
 
-TLS buffers are heap-allocated: 16640 bytes read (max TLS record size), 1024 bytes write. Combined with the 72KB heap this fits both the ESP32 DevKit (520KB SRAM) and ESP32-C3 SuperMini (400KB SRAM). Using a larger heap (e.g. 110KB) causes stack collisions and crashes during the TLS handshake.
+TLS buffers are heap-allocated: 16640 bytes read (max TLS record size), 1024 bytes write. Combined with the 96KB heap this fits both the ESP32 DevKit (520KB SRAM) and the XIAO ESP32-C3 (400KB SRAM). Pushing the heap higher (e.g. 110KB) causes stack collisions and crashes during the TLS handshake, so 96KB is the current ceiling.

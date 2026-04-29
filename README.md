@@ -48,7 +48,7 @@ make esp32-build-dev    # build the firmware
 make esp32-flash-dev    # flash and monitor
 make esp32-stop-dev     # erase flash
 
-# ESP32-C3 SuperMini (prod)
+# XIAO ESP32-C3 (prod)
 make esp32-build-prod   # build the firmware
 make esp32-flash-prod   # flash and monitor
 make esp32-stop-prod    # erase flash
@@ -64,4 +64,8 @@ make consumer-logs    # tail consumer logs
 
 ### Case
 
-The `case/` directory contains a 3D-printable enclosure (`.3mf`) for the ESP32-C3 SuperMini board used in the production deployment.
+The `case/` directory contains a 3D-printable enclosure for the XIAO ESP32-C3 used in the production deployment: `case.scad` (OpenSCAD source) plus exported `case.stl` and `lid.stl`.
+
+## Future work
+
+- Consumer to persist uptime of both the server (consumer) and the watchdog (ESP32) to an external database, so liveness history can be queried beyond the in-memory `lastPing` window.
