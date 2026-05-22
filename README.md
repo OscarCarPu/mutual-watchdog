@@ -1,6 +1,16 @@
 # mutual-watchdog
 Watchdog system where an external ESP32 (Rust) periodically pings a home lab consumer (Go) over MQTT. If the ESP32 stops pinging, the consumer sends a Telegram alert. If MQTT is unreachable, the ESP32 sends its own Telegram alert directly.
 
+## Architecture
+
+The system has two independent alert paths so that a failure anywhere in the chain is caught:
+
+**Normal path** — the ESP32 wakes from deep sleep, connects to WiFi, and publishes a ping to the MQTT broker. The Go consumer subscribes to that topic and resets its timeout on every ping. If no ping arrives within the configured timeout, the consumer fires a Telegram alert.
+
+**Fallback path** — if the ESP32 cannot reach the MQTT broker (broker down, network issue, home lab offline), it skips MQTT entirely and calls the Telegram HTTP API directly over TLS from the firmware. This means the ESP32 monitors the home lab, and the home lab monitors the ESP32 — neither side can silently fail.
+
+Alert state is stored in RTC fast memory (`.rtc_fast.persistent`) so it survives deep sleep without triggering duplicate alerts across cycles.
+
 ## Docs
 
 - [ESP32 docs](docs/esp32.md)
