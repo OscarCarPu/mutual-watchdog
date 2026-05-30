@@ -13,8 +13,8 @@ Alert state is stored in RTC fast memory (`.rtc_fast.persistent`) so it survives
 
 ## Docs
 
-- [ESP32 docs](docs/esp32.md)
-- [Consumer docs](docs/consumer.md)
+- [State flow](docs/flow_state.md)
+- `docs/features/` — in-progress feature specs
 
 ### Configuration
 
@@ -75,7 +75,3 @@ make consumer-logs    # tail consumer logs
 ### Case
 
 The `case/` directory contains a 3D-printable enclosure for the XIAO ESP32-C3 used in the production deployment: `case.scad` (OpenSCAD source) plus exported `case.stl` and `lid.stl`.
-
-## Future work
-
-- Consumer to persist uptime of both the server (consumer) and the watchdog (ESP32) to an external database, so liveness history can be queried beyond the in-memory `lastPing` window.
