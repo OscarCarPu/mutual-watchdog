@@ -4,7 +4,7 @@ Two uptime series are tracked: **lab** (detected by the ESP32 — MQTT unreachab
 
 ## System topology
 
-The Uptime API runs inside the home lab alongside the consumer. When the lab restarts both come up together but not in lockstep — events are queued to disk to bridge the startup race, and flushed once the API is ready.
+mutual-watchdog is responsible for monitoring and alerting only. Persistence is handled by central-pipeline, which consumes all MQTT topics and feeds gv-api.
 
 ```mermaid
 graph LR
@@ -15,19 +15,19 @@ graph LR
     subgraph homelab["Home Lab"]
         MQTT["MQTT Broker"]
         Consumer["Consumer"]
-        UptimeAPI["Uptime API"]
-        DiskQ[("disk queue\n/data/pending_uptime.json")]
+        CentralPipeline["central-pipeline"]
     end
 
     Telegram["Telegram Bot"]
+    GvAPI["gv-api"]
 
     ESP32 -- "ping every N min" --> MQTT
     MQTT --> Consumer
     Consumer -. "timeout / recovery alert" .-> Telegram
     ESP32 -. "lab-down alert\n(MQTT unreachable)" .-> Telegram
-    Consumer -- "watchdog event\n(POST on recovery)" --> UptimeAPI
-    Consumer -- "lab event\n(POST on boot after outage)" --> UptimeAPI
-    Consumer <-- "persist on fail\nretry every 5 min" --> DiskQ
+    Consumer -- "derived event\n(events/uptime/watchdog)" --> MQTT
+    MQTT --> CentralPipeline
+    CentralPipeline --> GvAPI
 ```
 
 ## Event payload
@@ -49,7 +49,7 @@ For **lab events**: `down_at` is the last known ping time before the outage, `up
 
 ## Checklist
 
-- [ ] Create `/data` folder, Docker volume, and env vars (`UPTIME_API_URL`, `UPTIME_API_TOKEN`, `UPTIME_QUEUE_FILE`)
-- [ ] Persist consumer downtime — write `down_since` + `last_ping_at` to disk; reconstruct lab outage window on next boot
-- [ ] Persist watchdog downtime — write `down_since` when alert fires; complete the event on recovery ping
-- [ ] Send events to API — POST on recovery, queue to disk on failure, retry every 5 min
+- [ ] Define MQTT topic schema for derived events (`events/uptime/watchdog`, `events/uptime/lab`)
+- [ ] Persist `down_since` + `last_ping_at` to disk on timeout; reconstruct outage window on recovery
+- [ ] Publish derived event to MQTT on recovery (central-pipeline handles persistence from there)
+- [ ] On lab restart: publish lab outage event to MQTT using last known ping time as `down_at`
