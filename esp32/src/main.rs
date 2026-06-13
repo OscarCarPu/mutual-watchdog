@@ -26,6 +26,7 @@ use esp_hal::{
     },
     timer::timg::TimerGroup,
 };
+use mutual_watchdog::{AlertAction, ALERT_ACTIVE, compute_alert_action};
 use esp_println::println;
 use esp_radio::{
     Controller,
@@ -65,10 +66,10 @@ const MQTT_PASSWORD: &str = env!("MQTT_PASSWORD");
 const TELEGRAM_API_TOKEN: &str = env!("TELEGRAM_API_TOKEN");
 const TELEGRAM_CHAT_ID: &str = env!("TELEGRAM_CHAT_ID");
 const PING_INTERVAL_SECS: &str = env!("PING_INTERVAL_SECS");
+const TOPIC_PING: &str = "watchdog/ping";
 
 #[unsafe(link_section = ".rtc_fast.persistent")]
 static mut ALERT_STATE: u32 = 0;
-const ALERT_ACTIVE: u32 = 0xA1E2_7001;
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -113,28 +114,22 @@ async fn main(spawner: Spawner) -> ! {
             result
         }
         Err(_e) => {
-            if unsafe { ALERT_STATE } != ALERT_ACTIVE {
+            if let AlertAction::SendAlert = compute_alert_action(false, unsafe { &mut ALERT_STATE }) {
                 send_telegram_message(stack, "Home lab isn't responding").await;
-                unsafe { ALERT_STATE = ALERT_ACTIVE };
             }
             println!("MQTT connect failed, sleeping...");
             deep_sleep(peripherals.LPWR);
         }
     };
 
-    match ping_result {
-        Ok(()) => {
-            if unsafe { ALERT_STATE } == ALERT_ACTIVE {
-                send_telegram_message(stack, "Home lab is responding again").await;
-                unsafe { ALERT_STATE = 0 };
-            }
+    match compute_alert_action(ping_result.is_ok(), unsafe { &mut ALERT_STATE }) {
+        AlertAction::SendRecovery => {
+            send_telegram_message(stack, "Home lab is responding again").await;
         }
-        Err(_e) => {
-            if unsafe { ALERT_STATE } != ALERT_ACTIVE {
-                send_telegram_message(stack, "Home lab isn't responding").await;
-                unsafe { ALERT_STATE = ALERT_ACTIVE };
-            }
+        AlertAction::SendAlert => {
+            send_telegram_message(stack, "Home lab isn't responding").await;
         }
+        AlertAction::NoAction => {}
     }
 
     println!("Sleeping...");
@@ -288,8 +283,7 @@ async fn create_mqtt_client(stack: Stack<'static>) -> Result<MqttClient, MqttErr
 }
 
 async fn send_mqtt_ping(client: &mut MqttClient) -> Result<(), MqttError<'static>> {
-    let topic =
-        unsafe { TopicName::new_unchecked(MqttString::from_slice("watchdog/ping").unwrap()) };
+    let topic = unsafe { TopicName::new_unchecked(MqttString::from_slice(TOPIC_PING).unwrap()) };
     let pub_options = PublicationOptions {
         retain: false,
         topic: topic.as_borrowed(),
