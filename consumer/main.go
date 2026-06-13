@@ -20,16 +20,26 @@ var (
 )
 
 type Watchdog struct {
-	mqttClient mqtt.Client
-	httpClient *http.Client
-	lastPing   time.Time
-	alertSent  bool
+	mqttClient  mqtt.Client
+	httpClient  *http.Client
+	lastPing    time.Time
+	alertSent   bool
+	sendMessage func(string) error
 }
+
+const (
+	TopicPing           = "watchdog/ping"
+	TopicUptimeLab      = "events/uptime/lab"
+	TopicUptimeWatchdog = "events/uptime/watchdog"
+)
 
 func NewWatchdog(broker string, user string, password string) *Watchdog {
 	w := &Watchdog{
 		httpClient: &http.Client{},
 		lastPing:   time.Now(),
+	}
+	w.sendMessage = func(msg string) error {
+		return sendMessageTelegram(w.httpClient, msg)
 	}
 
 	opts := mqtt.NewClientOptions().AddBroker(broker)
@@ -42,7 +52,7 @@ func NewWatchdog(broker string, user string, password string) *Watchdog {
 	opts.SetMaxReconnectInterval(30 * time.Second)
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
 		log.Println("MQTT connected, subscribing")
-		if token := c.Subscribe("watchdog/ping", 0, w.onPing); token.Wait() && token.Error() != nil {
+		if token := c.Subscribe(TopicPing, 0, w.onPing); token.Wait() && token.Error() != nil {
 			log.Printf("Subscribe failed: %v\n", token.Error())
 		}
 	})
@@ -71,29 +81,33 @@ func (w *Watchdog) onPing(_ mqtt.Client, _ mqtt.Message) {
 	}
 }
 
+func (w *Watchdog) checkTimeout(timeout time.Duration) {
+	elapsed := time.Since(w.lastPing)
+	if elapsed > timeout {
+		if !w.alertSent {
+			log.Println("Timeout, sending alert")
+			if err := w.sendMessage("Esp32 watchdog isn't responding"); err != nil {
+				log.Printf("Failed to send alert: %v\n", err)
+			} else {
+				w.alertSent = true
+			}
+		} else {
+			log.Printf("No response, elapsed: %v\n", elapsed.Round(time.Second))
+		}
+	}
+}
+
 func (w *Watchdog) StartTimeoutChecker() {
 	go func() {
 		time.Sleep(timeoutDuration)
 		ticker := time.NewTicker(checkInterval)
 		for range ticker.C {
-			elapsed := time.Since(w.lastPing)
-			if elapsed > timeoutDuration {
-				if !w.alertSent {
-					log.Println("Timeout, sending alert")
-					if err := w.sendMessage("Esp32 watchdog isn't responding"); err != nil {
-						log.Printf("Failed to send alert: %v\n", err)
-					} else {
-						w.alertSent = true
-					}
-				} else {
-					log.Printf("No response, elapsed: %v\n", elapsed.Round(time.Second))
-				}
-			}
+			w.checkTimeout(timeoutDuration)
 		}
 	}()
 }
 
-func (w *Watchdog) sendMessage(message string) error {
+func sendMessageTelegram(httpClient *http.Client, message string) error {
 	rawURL := fmt.Sprintf(
 		"https://api.telegram.org/bot%s/sendMessage?chat_id=%s&text=%s",
 		telegramToken,
@@ -107,7 +121,7 @@ func (w *Watchdog) sendMessage(message string) error {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := w.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
