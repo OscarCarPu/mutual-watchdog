@@ -49,7 +49,7 @@ For **lab events**: `down_at` is the last known ping time before the outage, `up
 
 ## Checklist
 
-- [ ] Define MQTT topic schema for derived events (`events/uptime/watchdog`, `events/uptime/lab`)
-- [ ] Persist `down_since` + `last_ping_at` to disk on timeout; reconstruct outage window on recovery
+- [x] Define MQTT topic schema for derived events (`events/uptime/watchdog`, `events/uptime/lab`)
+- [x] Persist uptime state to disk via the `Uptime` struct (`device` / `status` / `timestamp`); reconstruct outage window on recovery
 - [ ] Publish derived event to MQTT on recovery (central-pipeline handles persistence from there)
 - [ ] On lab restart: publish lab outage event to MQTT using last known ping time as `down_at`

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -22,9 +24,98 @@ var (
 type Watchdog struct {
 	mqttClient  mqtt.Client
 	httpClient  *http.Client
+	tracker     *UptimeTracker
 	lastPing    time.Time
 	alertSent   bool
 	sendMessage func(string) error
+}
+
+type UptimeTracker struct {
+	mqttClient         mqtt.Client
+	pathPersistentData string
+}
+
+type Device string
+
+const (
+	DeviceLab      Device = "lab"
+	DeviceWatchdog Device = "watchdog"
+)
+
+type Uptime struct {
+	device    Device
+	status    bool // 1 up 0 down
+	timestamp time.Time
+}
+
+type Entry map[Device]time.Time
+
+const persistentDataPath = "/app/data/uptime.json"
+
+func NewUptimeTracker(mqttClient mqtt.Client, path string) (*UptimeTracker, error) {
+	ut := &UptimeTracker{mqttClient: mqttClient, pathPersistentData: path}
+	if err := ut.ensure(); err != nil {
+		return nil, err
+	}
+	return ut, nil
+}
+
+func (ut *UptimeTracker) ensure() error {
+	if _, err := os.Stat(ut.pathPersistentData); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(ut.pathPersistentData), 0755); err != nil {
+		return err
+	}
+
+	entry := Entry{DeviceLab: {}, DeviceWatchdog: {}}
+	out, err := json.MarshalIndent(entry, "", " ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ut.pathPersistentData, out, 0644)
+}
+
+func (ut *UptimeTracker) storeState(lastPing time.Time, device Device) error {
+	if err := ut.ensure(); err != nil {
+		return err
+	}
+
+	data, err := os.ReadFile(ut.pathPersistentData)
+	if err != nil {
+		return err
+	}
+
+	var entry Entry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return err
+	}
+
+	entry[device] = lastPing
+
+	out, err := json.MarshalIndent(entry, "", " ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(ut.pathPersistentData, out, 0644)
+}
+
+func (ut *UptimeTracker) loadState(device Device) (time.Time, error) {
+	data, err := os.ReadFile(ut.pathPersistentData)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	var entry Entry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return time.Time{}, err
+	}
+
+	return entry[device], nil
 }
 
 const (
@@ -33,7 +124,7 @@ const (
 	TopicUptimeWatchdog = "events/uptime/watchdog"
 )
 
-func NewWatchdog(broker string, user string, password string) *Watchdog {
+func NewWatchdog(broker string, user string, password string, dataPath string) (*Watchdog, error) {
 	w := &Watchdog{
 		httpClient: &http.Client{},
 		lastPing:   time.Now(),
@@ -61,7 +152,14 @@ func NewWatchdog(broker string, user string, password string) *Watchdog {
 	})
 
 	w.mqttClient = mqtt.NewClient(opts)
-	return w
+
+	tracker, err := NewUptimeTracker(w.mqttClient, dataPath)
+	if err != nil {
+		return nil, err
+	}
+	w.tracker = tracker
+
+	return w, nil
 }
 
 func (w *Watchdog) Connect() error {
@@ -72,6 +170,11 @@ func (w *Watchdog) Connect() error {
 
 func (w *Watchdog) onPing(_ mqtt.Client, _ mqtt.Message) {
 	w.lastPing = time.Now()
+	if w.tracker != nil {
+		if err := w.tracker.storeState(w.lastPing, DeviceWatchdog); err != nil {
+			log.Printf("Failed to persist watchdog state: %v\n", err)
+		}
+	}
 	if w.alertSent {
 		log.Println("Sending recovery alert")
 		if err := w.sendMessage("Esp32 watchdog is responding again"); err != nil {
@@ -143,7 +246,10 @@ func main() {
 	checkInterval, _ = time.ParseDuration(os.Getenv("CHECK_INTERVAL_SECS") + "s")
 	timeoutDuration, _ = time.ParseDuration(os.Getenv("TIMEOUT_SECS") + "s")
 
-	w := NewWatchdog(broker, user, password)
+	w, err := NewWatchdog(broker, user, password, persistentDataPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize watchdog: %v\n", err)
+	}
 
 	if err := w.Connect(); err != nil {
 		log.Printf("Initial MQTT connect pending: %v (will keep retrying)\n", err)

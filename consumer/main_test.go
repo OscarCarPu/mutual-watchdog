@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -45,6 +46,40 @@ func TestTimeoutChecker(t *testing.T) {
 
 			if w.alertSent != tt.wantAlertSent {
 				t.Fatalf("alertSent=%v, want=%v", w.alertSent, tt.wantAlertSent)
+			}
+		})
+	}
+}
+
+func TestUptimeTrackerStoreLoad(t *testing.T) {
+	tests := []struct {
+		name   string
+		device Device
+	}{
+		{"watchdog device", DeviceWatchdog},
+		{"lab device", DeviceLab},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "uptime.json")
+			ut, err := NewUptimeTracker(nil, path)
+			if err != nil {
+				t.Fatalf("NewUptimeTracker: %v", err)
+			}
+
+			want := time.Now().Truncate(time.Second)
+			if err := ut.storeState(want, tt.device); err != nil {
+				t.Fatalf("storeState: %v", err)
+			}
+
+			got, err := ut.loadState(tt.device)
+			if err != nil {
+				t.Fatalf("loadState: %v", err)
+			}
+
+			if !got.Equal(want) {
+				t.Fatalf("loadState=%v, want=%v", got, want)
 			}
 		})
 	}
