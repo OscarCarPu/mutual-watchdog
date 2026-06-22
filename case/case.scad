@@ -1,7 +1,7 @@
 // ===== WATCHDOG CASE =====
 // Set which part to render
-show_body = 0;  // 1 = show body, 0 = hide
-show_lid = 1;   // 1 = show lid, 0 = hide
+show_body = 1;  // 1 = show body, 0 = hide
+show_lid = 0;   // 1 = show lid, 0 = hide
 
 
 
