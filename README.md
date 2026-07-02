@@ -14,7 +14,7 @@ Alert state is stored in RTC fast memory (`.rtc_fast.persistent`) so it survives
 ## Docs
 
 - [State flow](docs/flow_state.md)
-- `docs/features/` — in-progress feature specs
+- [MQTT topics](docs/topics_mqtt.md)
 
 ### Configuration
 
